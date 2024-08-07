@@ -5,7 +5,6 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
@@ -27,7 +26,6 @@ namespace Jellyfin.Plugin.Tvdb.Providers
     /// </summary>
     public class TvdbSeriesProvider : IRemoteMetadataProvider<Series, SeriesInfo>
     {
-        private const int MaxSearchResults = 10;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly ILogger<TvdbSeriesProvider> _logger;
         private readonly ILibraryManager _libraryManager;
@@ -300,7 +298,7 @@ namespace Jellyfin.Plugin.Tvdb.Providers
         private async Task<List<RemoteSearchResult>> FindSeriesInternal(string name, string language, CancellationToken cancellationToken)
         {
             var parsedName = _libraryManager.ParseName(name);
-            var comparableName = GetComparableName(parsedName.Name);
+            var comparableName = TvdbUtils.GetComparableName(parsedName.Name);
 
             var list = new List<Tuple<List<string>, RemoteSearchResult>>();
             IReadOnlyList<SearchResult> result;
@@ -378,26 +376,7 @@ namespace Jellyfin.Plugin.Tvdb.Providers
                 .ThenBy(i => i.Item1.Any(title => title.Contains(comparableName, StringComparison.OrdinalIgnoreCase)) ? 0 : 1)
                 .ThenBy(i => list.IndexOf(i))
                 .Select(i => i.Item2)
-                .Take(MaxSearchResults) // TVDB returns a lot of unrelated results
                 .ToList();
-        }
-
-        /// <summary>
-        /// Gets the name of the comparable.
-        /// </summary>
-        /// <param name="name">The name.</param>
-        /// <returns>System.String.</returns>
-        private static string GetComparableName(string name)
-        {
-            name = name.ToLowerInvariant();
-            name = name.Normalize(NormalizationForm.FormC);
-            name = name.Replace(", the", string.Empty, StringComparison.OrdinalIgnoreCase)
-                .Replace("the ", " ", StringComparison.OrdinalIgnoreCase)
-                .Replace(" the ", " ", StringComparison.OrdinalIgnoreCase);
-            name = name.Replace("&", " and ", StringComparison.OrdinalIgnoreCase);
-            name = Regex.Replace(name, @"[\p{Lm}\p{Mn}]", string.Empty); // Remove diacritics, etc
-            name = Regex.Replace(name, @"[\W\p{Pc}]+", " "); // Replace sequences of non-word characters and _ with " "
-            return name.Trim();
         }
 
         private static void MapActorsToResult(MetadataResult<Series> result, IEnumerable<Character> actors)
@@ -408,12 +387,17 @@ namespace Jellyfin.Plugin.Tvdb.Providers
                 {
                     Type = PersonKind.Actor,
                     Name = (actor.PersonName ?? string.Empty).Trim(),
-                    Role = actor.Name
+                    Role = actor.Name,
                 };
 
                 if (!string.IsNullOrEmpty(actor.PersonImgURL))
                 {
                     personInfo.ImageUrl = actor.PersonImgURL;
+                }
+
+                if (actor.PeopleId.HasValue)
+                {
+                    personInfo.SetTvdbId(actor.PeopleId.Value);
                 }
 
                 if (!string.IsNullOrWhiteSpace(personInfo.Name))
@@ -454,7 +438,7 @@ namespace Jellyfin.Plugin.Tvdb.Providers
             series.AirTime = tvdbSeries.AirsTime;
             // series.CommunityRating = (float?)tvdbSeries.SiteRating;
             // Attempts to default to USA if not found
-            series.OfficialRating = tvdbSeries.ContentRatings.FirstOrDefault(x => string.Equals(x.Country, TvdbCultureInfo.GetCountryInfo(info.MetadataCountryCode)?.ThreeLetterISORegionName, StringComparison.OrdinalIgnoreCase))?.Name ?? tvdbSeries.ContentRatings.FirstOrDefault(x => string.Equals(x.Country, "usa", StringComparison.OrdinalIgnoreCase))?.Name;
+            series.OfficialRating = tvdbSeries.ContentRatings?.FirstOrDefault(x => string.Equals(x.Country, TvdbCultureInfo.GetCountryInfo(info.MetadataCountryCode)?.ThreeLetterISORegionName, StringComparison.OrdinalIgnoreCase))?.Name ?? tvdbSeries.ContentRatings?.FirstOrDefault(x => string.Equals(x.Country, "usa", StringComparison.OrdinalIgnoreCase))?.Name;
             if (tvdbSeries.Lists is not null && tvdbSeries.Lists is JsonElement jsonElement)
             {
                 var collections = jsonElement.Deserialize<List<object>>();

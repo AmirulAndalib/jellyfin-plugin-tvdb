@@ -9,6 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Tvdb.Configuration;
+using Jellyfin.Plugin.Tvdb.SeasonClient;
 using MediaBrowser.Common;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Globalization;
@@ -98,6 +99,81 @@ public class TvdbClientManager : IDisposable
             _tokenUpdatedAt == DateTime.MinValue
             || string.IsNullOrEmpty(_sdkClientSettings.AccessToken)
             || _tokenUpdatedAt < DateTime.UtcNow.Subtract(TimeSpan.FromDays(25));
+    }
+
+    /// <summary>
+    /// Gets movie by name.
+    /// </summary>
+    /// <param name="name">Movie Name.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The movie search result.</returns>
+    public async Task<IReadOnlyList<SearchResult>> GetMovieByNameAsync(
+        string name,
+        CancellationToken cancellationToken)
+    {
+        var key = $"TvdbMovieSearch_{name}";
+        if (_memoryCache.TryGetValue(key, out IReadOnlyList<SearchResult>? movies)
+                       && movies is not null)
+        {
+            return movies;
+        }
+
+        var searchClient = _serviceProvider.GetRequiredService<ISearchClient>();
+        await LoginAsync().ConfigureAwait(false);
+        var searchResult = await searchClient.GetSearchResultsAsync(query: name, type: "movie", limit: 5, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        _memoryCache.Set(key, searchResult.Data, TimeSpan.FromHours(CacheDurationInHours));
+        return searchResult.Data;
+    }
+
+    /// <summary>
+    /// Get movie by remoteId.
+    /// </summary>
+    /// <param name="remoteId">Remote Id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The movie search result.</returns>
+    public async Task<IReadOnlyList<SearchByRemoteIdResult>> GetMovieByRemoteIdAsync(
+        string remoteId,
+        CancellationToken cancellationToken)
+    {
+        var key = $"TvdbMovieRemoteId_{remoteId}";
+        if (_memoryCache.TryGetValue(key, out IReadOnlyList<SearchByRemoteIdResult>? movies)
+                                  && movies is not null)
+        {
+            return movies;
+        }
+
+        var searchClient = _serviceProvider.GetRequiredService<ISearchClient>();
+        await LoginAsync().ConfigureAwait(false);
+        var searchResult = await searchClient.GetSearchResultsByRemoteIdAsync(remoteId: remoteId, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        _memoryCache.Set(key, searchResult.Data, TimeSpan.FromHours(CacheDurationInHours));
+        return searchResult.Data;
+    }
+
+    /// <summary>
+    /// Get movie by id.
+    /// </summary>
+    /// <param name="tvdbId">The movie tvdb id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The movie response.</returns>
+    public async Task<MovieExtendedRecord> GetMovieExtendedByIdAsync(
+        int tvdbId,
+        CancellationToken cancellationToken)
+    {
+        var key = $"TvdbMovie_{tvdbId.ToString(CultureInfo.InvariantCulture)}";
+        if (_memoryCache.TryGetValue(key, out MovieExtendedRecord? movie)
+                       && movie is not null)
+        {
+            return movie;
+        }
+
+        var movieClient = _serviceProvider.GetRequiredService<IMoviesClient>();
+        await LoginAsync().ConfigureAwait(false);
+        var movieResult = await movieClient.GetMovieExtendedAsync(id: tvdbId, meta: Meta2.Translations, @short: false,  cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        _memoryCache.Set(key, movieResult.Data, TimeSpan.FromHours(CacheDurationInHours));
+        return movieResult.Data;
     }
 
     /// <summary>
@@ -221,21 +297,21 @@ public class TvdbClientManager : IDisposable
     /// <param name="language">Metadata language.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The episode record.</returns>
-    public async Task<SeasonExtendedRecord> GetSeasonByIdAsync(
+    public async Task<CustomSeasonExtendedRecord> GetSeasonByIdAsync(
         int seasonTvdbId,
         string language,
         CancellationToken cancellationToken)
     {
         var key = $"TvdbSeason_{seasonTvdbId.ToString(CultureInfo.InvariantCulture)}";
-        if (_memoryCache.TryGetValue(key, out SeasonExtendedRecord? season)
+        if (_memoryCache.TryGetValue(key, out CustomSeasonExtendedRecord? season)
             && season is not null)
         {
             return season;
         }
 
-        var seasonClient = _serviceProvider.GetRequiredService<ISeasonsClient>();
+        var seasonClient = _serviceProvider.GetRequiredService<IExtendedSeasonClient>();
         await LoginAsync().ConfigureAwait(false);
-        var seasonResult = await seasonClient.GetSeasonExtendedAsync(id: seasonTvdbId, cancellationToken: cancellationToken)
+        var seasonResult = await seasonClient.GetSeasonExtendedWithTranslationsAsync(id: seasonTvdbId, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
         _memoryCache.Set(key, seasonResult.Data, TimeSpan.FromHours(CacheDurationInHours));
         return seasonResult.Data;
@@ -296,19 +372,67 @@ public class TvdbClientManager : IDisposable
     }
 
     /// <summary>
+    /// Gets Actor by name.
+    /// </summary>
+    /// <param name="name">Name.</param>
+    /// <param name="cancellationToken">Cancellation Token.</param>
+    /// <returns>Search Results.</returns>
+    public async Task<IReadOnlyList<SearchResult>> GetActorByNameAsync(
+        string name,
+        CancellationToken cancellationToken)
+    {
+        var key = $"TvdbPeopleSearch_{name}";
+        if (_memoryCache.TryGetValue(key, out IReadOnlyList<SearchResult>? people)
+            && people is not null)
+        {
+            return people;
+        }
+
+        var searchClient = _serviceProvider.GetRequiredService<ISearchClient>();
+        await LoginAsync().ConfigureAwait(false);
+        var searchResult = await searchClient.GetSearchResultsAsync(query: name, type: "person", limit: 5, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        _memoryCache.Set(key, searchResult.Data, TimeSpan.FromHours(CacheDurationInHours));
+        return searchResult.Data;
+    }
+
+    /// <summary>
+    /// Get Actor by remoteId.
+    /// </summary>
+    /// <param name="remoteId">Remote Id.</param>
+    /// <param name="cancellationToken">Cancellation Token.</param>
+    /// <returns>Searched results.</returns>
+    public async Task<IReadOnlyList<SearchByRemoteIdResult>> GetActorByRemoteIdAsync(
+        string remoteId,
+        CancellationToken cancellationToken)
+    {
+        var key = $"TvdbPeopleRemoteId_{remoteId}";
+        if (_memoryCache.TryGetValue(key, out IReadOnlyList<SearchByRemoteIdResult>? people)
+            && people is not null)
+        {
+            return people;
+        }
+
+        var searchClient = _serviceProvider.GetRequiredService<ISearchClient>();
+        await LoginAsync().ConfigureAwait(false);
+        var searchResult = await searchClient.GetSearchResultsByRemoteIdAsync(remoteId: remoteId, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        _memoryCache.Set(key, searchResult.Data, TimeSpan.FromHours(CacheDurationInHours));
+        return searchResult.Data;
+    }
+
+    /// <summary>
     /// Get actors by tvdb id.
     /// </summary>
     /// <param name="tvdbId">People Tvdb id.</param>
-    /// <param name="language">Metadata language.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The actors attached to the id.</returns>
-    public async Task<PeopleBaseRecord> GetActorAsync(
+    public async Task<PeopleExtendedRecord> GetActorExtendedByIdAsync(
         int tvdbId,
-        string language,
         CancellationToken cancellationToken)
     {
         var key = $"TvdbPeople_{tvdbId.ToString(CultureInfo.InvariantCulture)}";
-        if (_memoryCache.TryGetValue(key, out PeopleBaseRecord? people)
+        if (_memoryCache.TryGetValue(key, out PeopleExtendedRecord? people)
             && people is not null)
         {
             return people;
@@ -316,7 +440,7 @@ public class TvdbClientManager : IDisposable
 
         var peopleClient = _serviceProvider.GetRequiredService<IPeopleClient>();
         await LoginAsync().ConfigureAwait(false);
-        var peopleResult = await peopleClient.GetPeopleBaseAsync(id: tvdbId, cancellationToken: cancellationToken)
+        var peopleResult = await peopleClient.GetPeopleExtendedAsync(id: tvdbId, meta: Meta3.Translations, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
         _memoryCache.Set(key, peopleResult.Data, TimeSpan.FromHours(CacheDurationInHours));
         return peopleResult.Data;
@@ -614,13 +738,14 @@ public class TvdbClientManager : IDisposable
         services.AddTransient<ILoginClient>(_ => new LoginClient(_sdkClientSettings, _httpClientFactory.CreateClient(TvdbHttpClient)));
         services.AddTransient<ISearchClient>(_ => new SearchClient(_sdkClientSettings, _httpClientFactory.CreateClient(TvdbHttpClient)));
         services.AddTransient<ISeriesClient>(_ => new SeriesClient(_sdkClientSettings, _httpClientFactory.CreateClient(TvdbHttpClient)));
-        services.AddTransient<ISeasonsClient>(_ => new SeasonsClient(_sdkClientSettings, _httpClientFactory.CreateClient(TvdbHttpClient)));
+        services.AddTransient<IExtendedSeasonClient>(_ => new ExtendedSeasonClient(_sdkClientSettings, _httpClientFactory.CreateClient(TvdbHttpClient)));
         services.AddTransient<IEpisodesClient>(_ => new EpisodesClient(_sdkClientSettings, _httpClientFactory.CreateClient(TvdbHttpClient)));
         services.AddTransient<IPeopleClient>(_ => new PeopleClient(_sdkClientSettings, _httpClientFactory.CreateClient(TvdbHttpClient)));
         services.AddTransient<IArtworkClient>(_ => new ArtworkClient(_sdkClientSettings, _httpClientFactory.CreateClient(TvdbHttpClient)));
         services.AddTransient<IArtwork_TypesClient>(_ => new Artwork_TypesClient(_sdkClientSettings, _httpClientFactory.CreateClient(TvdbHttpClient)));
         services.AddTransient<ILanguagesClient>(_ => new LanguagesClient(_sdkClientSettings, _httpClientFactory.CreateClient(TvdbHttpClient)));
         services.AddTransient<IUpdatesClient>(_ => new UpdatesClient(_sdkClientSettings, _httpClientFactory.CreateClient(TvdbHttpClient)));
+        services.AddTransient<IMoviesClient>(_ => new MoviesClient(_sdkClientSettings, _httpClientFactory.CreateClient(TvdbHttpClient)));
 
         return services.BuildServiceProvider();
     }
